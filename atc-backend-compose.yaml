@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+
+  # --- PostgreSQL Service ---
+  postgresKeycloak:
+  
+    image: postgres:latest
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgresPassword
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak -q"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    secrets:
+      - postgresPassword
+    volumes:
+      - keycloakVolume:/var/lib/postgresql/data
+    networks:
+      - keycloakNetwork
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # --- Keycloak Service ---
+  keycloakATC:
+    image: quay.io/keycloak/keycloak:latest
+    ports:
+      - "9280:8080"
+    command: ["start"]
+    entrypoint: /opt/keycloak/bin/keycloak-entrypoint.sh
+    environment:
+      # --- Use LATEST bootstrap variables ---
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+        #  - KC_BOOTSTRAP_ADMIN_PASSWORD_FILE=/run/secrets/keycloak_admin_password (entry point script calls upond the keycloak secret)
+
+      # Database connection settings (Password handled by entrypoint)
+      - KC_DB=postgres
+      - KC_DB_URL_HOST=postgresKeycloak
+      - KC_DB_URL_DATABASE=keycloak
+      - KC_DB_USERNAME=keycloak
+
+      # Keycloak hostname configuration
+      - KC_HOSTNAME=http://209.145.51.116:9280
+      - KC_HTTP_ENABLED=true
+    secrets:
+      - keycloak_admin_password # Needed by KC_BOOTSTRAP_ADMIN_PASSWORD_FILE
+      - postgresPassword        # Needed by entrypoint script
+    volumes:
+      - ./keycloak-entrypoint.sh:/opt/keycloak/bin/keycloak-entrypoint.sh:ro
+      - keycloakDataVolume:/opt/keycloak/data # Dedicated volume for Keycloak
+    depends_on:
+      - postgresKeycloak
+    networks:
+      - keycloakNetwork
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+  # --- Redis Service ---
+  redisATC:
+  
+    image: redis:latest
+    command: ["/bin/sh", "-c", "redis-server --requirepass $$(cat /run/secrets/redisPassword)"]
+    secrets:
+      - redisPassword
+    volumes:
+      - redisVolume:/data
+    networks:
+      - redisNetwork
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+# Volumes
+volumes:
+  keycloakVolume:
+  keycloakDataVolume:
+  redisVolume:
+
+# Networks
+networks:
+  keycloakNetwork:
+    driver: overlay
+    attachable: true
+  redisNetwork:
+    driver: overlay
+    attachable: true
+
+# Secrets
+secrets:
+  postgresPassword:
+    external: true
+    name: postgresPassword
+  keycloak_admin_password:
+    external: true
+    name: keycloak_admin_password
+  redisPassword:
+    external: true
+    name: redisPassword
