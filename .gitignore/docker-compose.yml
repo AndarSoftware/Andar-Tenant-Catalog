@@ -36,7 +36,7 @@ services:
     environment:
       # --- Use LATEST bootstrap variables ---
       - KC_BOOTSTRAP_ADMIN_USERNAME=admin
-        #  - KC_BOOTSTRAP_ADMIN_PASSWORD_FILE=/run/secrets/keycloak_admin_password (entry point script calls upond the keycloak secret)
+        #  - KC_BOOTSTRAP_ADMIN_PASSWORD_FILE=/run/secrets/keycloak_admin_password (entry point script calls upon the keycloak secret)
 
       # Database connection settings (Password handled by entrypoint)
       - KC_DB=postgres
@@ -45,8 +45,11 @@ services:
       - KC_DB_USERNAME=keycloak
 
       # Keycloak hostname configuration
-      - KC_HOSTNAME=http://209.145.51.116:9280
+      - KC_HOSTNAME=https://key.andarhosting.com
+      - KC_HOSTNAME_ADMIN_URL=https://key.andarhosting.com
       - KC_HTTP_ENABLED=true
+      - KC_PROXY=edge
+      - KC_HOSTNAME_STRICT_HTTPS=true
     secrets:
       - keycloak_admin_password # Needed by KC_BOOTSTRAP_ADMIN_PASSWORD_FILE
       - postgresPassword        # Needed by entrypoint script
@@ -75,6 +78,63 @@ services:
     deploy:
       restart_policy:
         condition: on-failure
+
+
+# --- ATC Application Service ---
+  atcApp:
+    image: atc:apr30 # The image tag provided
+    environment:
+      # --- Configure ATC ---
+      # Internal port ATC will listen on
+      - SERVER_PORT=8080
+
+      # --- Redis Connection (using service discovery) ---
+      # Docker Swarm DNS resolves 'redisATC' within the redisNetwork
+      - SPRING_DATA_REDIS_HOST=redisATC
+      # Standard Redis port
+      - SPRING_DATA_REDIS_PORT=6379
+      # The 'password' env var will be set by the entrypoint script
+      - SPRING_DATA_REDIS_PASSWORD=${password} 
+      - LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY=DEBUG
+      # Spring boot will use the password secert var in the entrypoint script
+      # --- Keycloak Connection ---
+      # Use the external URL configured for Keycloak in this stack
+      - KEYCLOAK_BASEURL=https://key.andarhosting.com
+      - KEYCLOAK_CLIENT=atc-login # KC Client ID
+      - KEYCLOAK_REALM=atc      # Realm name for ATC in Keycloak
+
+# --- ATC Public URL connection ---
+      - SERVER_FORWARD_HEADERS_STRATEGY=NATIVE
+      
+
+  
+    secrets:
+      # Make the Redis password secret available to the entrypoint script at /run/secrets/redisPassword
+      - redisPassword
+    networks:
+      # Connect to Redis network to resolve and communicate with the redisATC service
+      - redisNetwork
+      # Connect to keycloakNetwork if direct internal communication is needed
+      - keycloakNetwork
+    ports:
+      # Map host port 9700 to container port 8080
+      - "9700:8080"
+    depends_on:
+      # Influence startup order: wait for Redis and Keycloak services to be started
+      - redisATC
+      - keycloakATC
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+    # --- Entrypoint Configuration ---
+    volumes:
+      # Mount the entrypoint script from the host's current directory into the container
+      - ./atc-entrypoint.sh:/atc-entrypoint.sh
+    # Override the default entrypoint to run our script first
+    entrypoint: ["/bin/sh", "/atc-entrypoint.sh"]
+    # Specify the command for the entrypoint script to execute after setting the password
+    command: ["java", "-jar", "/app.jar"] # Adjust /app.jar if your application JAR has a different name/path
 
 # Volumes
 volumes:
